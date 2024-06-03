@@ -1,28 +1,13 @@
 import os
 import numpy as np
 import torch
+from torchvision import transforms
+import torch.nn as nn
 import transformer, network, losses
 from torch.utils import data
 
 
 # Modified on @Yunfan Li's Contrastive-Clustering code. https://github.com/Yunfan-Li/Contrastive-Clustering
-def train():
-    loss_epoch = 0
-    for step, ((x_i, x_j), _) in enumerate(data_loader):
-        optimizer.zero_grad()
-        x_i = x_i.to('cuda')
-        x_j = x_j.to('cuda')
-        z_i, z_j, c_i, c_j = model(x_i, x_j)
-        loss_instance = criterion_instance(z_i, z_j)
-        loss_cluster = criterion_cluster(c_i, c_j)
-        loss = loss_instance + loss_cluster
-        loss.backward()
-        optimizer.step()
-        if step % 50 == 0:
-            print(
-                f"Step [{step}/{len(data_loader)}]\t loss_instance: {loss_instance.item()}\t loss_cluster: {loss_cluster.item()}")
-        loss_epoch += loss.item()
-    return loss_epoch
 
 def save_model(model_path, model, optimizer, current_epoch):
     out = os.path.join(model_path, "checkpoint_{}.tar".format(current_epoch))
@@ -32,13 +17,13 @@ def save_model(model_path, model, optimizer, current_epoch):
 if __name__ == "__main__":
     model_path = 'pretrained_models'
     seed = 1
-    dataset_dir = ''
+    dataset_dir = r'D:\workspace\LUAD&LUSC\data\cancer\jpg\*'
     image_size = 256
-    batch_size = 4
-    learning_rate = 1e-3
+    batch_size = 16
+    learning_rate = 1e-4
     weight_decay = 0.1
     start_epoch = 0
-    epochs = 500
+    epochs = 50
     workers = 4
     reload = False
     instance_temperature = 0.1
@@ -52,13 +37,18 @@ if __name__ == "__main__":
     np.random.seed(seed)
 
     # prepare data
-    train_dataset = transformer.CIDataset(
+    train_dataset = transformer.CLSDataset(
         root=dataset_dir,
-        transform=transformer.Transforms( s=0.5),
+        transform=transforms.Compose([transforms.Resize((224,224)),
+                                      transforms.RandomHorizontalFlip(p=0.33),
+                                      transforms.RandomVerticalFlip(p=0.33),
+                                      transforms.RandomRotation(degrees=10),
+                                      transforms.ToTensor()])
     )
-    test_dataset = transformer.CIDataset(
+    test_dataset = transformer.CLSDataset(
         root=dataset_dir,
-        transform=transformer.Transforms( s=0.5),
+        transform=transforms.Compose([transforms.Resize((224,224)),
+                                      transforms.ToTensor(),])
     )
     dataset = data.ConcatDataset([train_dataset, test_dataset])
     data_loader = torch.utils.data.DataLoader(
@@ -68,30 +58,40 @@ if __name__ == "__main__":
         drop_last=True,
         num_workers=workers,
     )
-    class_num = 2
+    class_num = 5
 
     # initialize model
-    model = network.LUCCModel()
+    model = network.LUCLSModel()
     model = model.to('cuda')
     # optimizer / loss
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     if reload:
-        model_fp = os.path.join(model_path, "checkpoint_{}.tar".format(start_epoch))
+        model_fp = os.path.join(model_path, "checkpoint_{}.pt".format(start_epoch))
         checkpoint = torch.load(model_fp)
         model.load_state_dict(checkpoint['net'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch = checkpoint['epoch'] + 1
     else:
         start_epoch = 0
-    loss_device = torch.device("cuda")
-    criterion_instance = losses.InstanceLoss(batch_size, instance_temperature, loss_device).to(
-        loss_device)
-    criterion_cluster = losses.ClusterLoss(class_num,cluster_temperature, loss_device).to(loss_device)
+    device = torch.device("cuda")
+    criterion= nn.CrossEntropyLoss().to(device)
     # train
     for epoch in range(start_epoch, epochs):
         lr = optimizer.param_groups[0]["lr"]
-        loss_epoch = train()
-        if epoch % 10 == 0:
+        loss_epoch = 0
+        for step, (x, y) in enumerate(data_loader):
+            x = x.to('cuda')
+            y = y.to('cuda')
+            pred = model(x)
+            loss = criterion(pred, y)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            if step % 500 == 0:
+                print(
+                    f"Step [{step}/{len(data_loader)}]\t loss: {loss.item()}")
+            loss_epoch += loss.item()
+        if epoch % 5 == 0:
             save_model(model_path, model, optimizer, epoch)
         print(f"Epoch [{epoch}/{epochs}]\t Loss: {loss_epoch / len(data_loader)}")
     save_model(model_path, model, optimizer, epochs)

@@ -4,6 +4,7 @@ import torchvision
 import cv2
 from torch.utils.data import Dataset
 import numpy as np
+from PIL import Image
 
 
 class GaussianBlur:
@@ -38,7 +39,26 @@ class CIDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-
+class CLSDataset(Dataset):
+    def __init__(self,root,transform = None):
+        self.transform = transform
+        self.data = glob.glob(os.path.join(root,'*.jpeg'))
+        self.label_dict = {
+            'colon_aca': 1,
+            'colon_n': 0,
+            'lung_aca': 2,
+            'lung_n': 0,
+            'lung_scc': 3,
+        }
+    def __getitem__(self, item):
+        path = self.data[item]
+        img = Image.open(path)#cv2.cvtColor(cv2.imread(path),cv2.COLOR_BGR2RGB)
+        if self.transform is not None:
+            img = self.transform(img)
+        label = self.label_dict[path.split('\\')[-2]]
+        return img,label
+    def __len__(self):
+        return len(self.data)
 
 
 
